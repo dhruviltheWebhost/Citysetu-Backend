@@ -1,293 +1,335 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import axios from 'axios';
+import { nanoid } from 'nanoid';
 import { Buffer } from 'buffer';
-import { customAlphabet } from 'nanoid';
 
 // --- 1. INITIAL SETUP ---
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
-const startTime = Date.now();
+const appStartTime = Date.now();
 
-// --- 2. ENVIRONMENT & GITHUB CONFIG ---
-// These are your secret keys from Render's .env settings
-const {
-  "Dhruvil@6108",
-  "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",
-  "dhruviltheWebhost", // e.g., "DhruvilBarot"
-  "Citysetu-Backend",  // e.g., "citysetu-data-repo"
-  "main" // e.g., "main"
-} = process.env;
+// --- 2. GITHUB API CONFIGURATION ---
+// These are your environment variables from Render
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const REPO_OWNER = process.env.GITHUB_REPO_OWNER;
+const REPO_NAME = process.env.GITHUB_REPO_NAME;
+const REPO_BRANCH = process.env.GITHUB_REPO_BRANCH || 'main';
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 
-// GitHub API URLs
-const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/contents`;
-const GITHUB_HEADERS = {
-  Authorization: `token ${GITHUB_TOKEN}`,
-  Accept: 'application/vnd.github.v3+json',
-};
+const GITHUB_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/`;
 
-// --- 3. CORS CONFIGURATION ---
-// URLs that are allowed to access your API
+// --- 3. MIDDLEWARE ---
+
+// CORS Middleware: Allow your frontend(s) to make requests
 const allowedOrigins = [
+  'https://citysetu.github.io', 
   'https://citysetu-admin.vercel.app',
-  'https://citysetu.github.io',
   'http://127.0.0.1:5500', // For local testing
-  'http://localhost:3000'  // For local React dev
+  'http://localhost:5173'  // For local React dev
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
     }
+    return callback(null, true);
   },
   methods: "GET,POST,PUT,DELETE,OPTIONS",
   allowedHeaders: "Content-Type, Authorization"
 }));
 
-// Handle pre-flight OPTIONS requests
-app.options('*', cors());
-app.use(express.json()); // Allow server to read JSON from requests
+// Body Parser Middleware: Allow server to read JSON from requests
+app.use(express.json());
+
+// Admin Authentication Middleware: Protects sensitive routes
+const authMiddleware = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Format: "Bearer YOUR_TOKEN"
+
+  if (token == null) {
+    return res.status(401).json({ message: 'Error: No token provided.' });
+  }
+  if (token !== ADMIN_TOKEN) {
+    return res.status(403).json({ message: 'Error: Invalid token.' });
+  }
+  next(); // Token is valid, proceed to the route
+};
 
 // --- 4. GITHUB API HELPER FUNCTIONS ---
 
 /**
- * Reads a JSON file from your GitHub repository.
- * @param {string} filePath - Path in the repo (e.g., "data/workers.json")
- * @returns {Promise<{data: Array<any>, sha: string|null}>}
+ * Reads a JSON file from your GitHub data repository.
+ * @param {string} filePath - Path to file, e.g., "data/workers.json"
  */
-const getFileFromRepo = async (filePath) => {
-  try {
-    const url = `${GITHUB_API_URL}/${filePath}?ref=${GITHUB_REPO_BRANCH}`;
-    const response = await axios.get(url, { headers: GITHUB_HEADERS });
-    const content = Buffer.from(response.data.content, 'base64').toString('utf8');
-    return { data: JSON.parse(content), sha: response.data.sha };
-  } catch (error) {
-    if (error.response && error.response.status === 404) {
-      // File doesn't exist, return empty state
-      return { data: [], sha: null };
-    }
-    // Other error
-    throw error;
-  }
-};
-
-/**
- * Creates or updates a JSON file in your GitHub repository.
- * @param {string} filePath - Path in the repo (e.g., "data/workers.json")
- * @param {Array<any>} newData - The new array to save.
- * @param {string|null} sha - The 'sha' of the file you are updating.
- */
-const updateFileInRepo = async (filePath, newData, sha) => {
-  const content = Buffer.from(JSON.stringify(newData, null, 2)).toString('base64');
-  const url = `${GITHUB_API_URL}/${filePath}`;
+const readFromGitHub = async (filePath) => {
+  const url = `${GITHUB_API_URL}${filePath}?ref=${REPO_BRANCH}`;
   
-  const payload = {
-    message: `[CitySetu API] Updated ${filePath} at ${new Date().toISOString()}`,
-    content: content,
-    branch: GITHUB_REPO_BRANCH,
-    sha: sha // If sha is null, GitHub API creates a new file
-  };
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `token ${GITHUB_TOKEN}`,
+        'Accept': 'application/vnd.github.v3.raw' // Get raw content
+      }
+    });
 
-  await axios.put(url, payload, { headers: GITHUB_HEADERS });
+    if (!response.ok) {
+      // If file not found, return empty array (for POST routes)
+      if (response.status === 404) {
+        console.log(`File not found: ${filePath}. Returning empty array.`);
+        return { sha: null, data: [] };
+      }
+      throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    
+    // To update a file, we need its "SHA"
+    // So we make a second call to get metadata
+    const metaResponse = await fetch(`${GITHUB_API_URL}${filePath}?ref=${REPO_BRANCH}`, {
+        headers: { 'Authorization': `token ${GITHUB_TOKEN}` }
+    });
+    const meta = await metaResponse.json();
+
+    return { sha: meta.sha, data: data };
+
+  } catch (error) {
+    console.error(`Error reading from GitHub (${filePath}):`, error.message);
+    // If any error (e.g., repo not found), return empty
+    return { sha: null, data: [] };
+  }
 };
-
-// --- 5. SECURITY MIDDLEWARE ---
 
 /**
- * Checks if the request has the valid ADMIN_TOKEN.
+ * Writes data to a JSON file in your GitHub data repository.
+ * @param {string} filePath - Path to file, e.g., "data/workers.json"
+ * @param {object} data - The new JSON data to write.
+ * @param {string} sha - The 'SHA' of the *old* file (required for updates).
+ * @param {string} commitMessage - A commit message.
  */
-const protect = (req, res, next) => {
+const writeToGitHub = async (filePath, data, sha, commitMessage) => {
+  const url = `${GITHUB_API_URL}${filePath}`;
+  
+  // Data must be in Base64
+  const content = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
+
+  const body = {
+    message: commitMessage,
+    content: content,
+    branch: REPO_BRANCH,
+    sha: sha // Include SHA if updating, omit if creating new
+  };
+  
+  // If file didn't exist (sha is null), don't send sha
+  if (!sha) delete body.sha;
+
   try {
-    const token = req.headers.authorization?.split(' ')[1]; // "Bearer <TOKEN>"
-    if (!token || token !== ADMIN_TOKEN) {
-      return res.status(401).json({ message: 'Error: Unauthorized. Invalid admin token.' });
-    }
-    next();
-  } catch (error) {
-    res.status(401).json({ message: 'Error: Unauthorized.' });
-  }
-};
-
-// --- 6. ID & TIMESTAMP GENERATOR ---
-const generateId = (prefix) => {
-  const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  const nanoid = customAlphabet(alphabet, 6);
-  return `${prefix.toUpperCase()}-${nanoid()}`; // e.g., CHAT-B245A1
-};
-const addTimestamp = (data) => {
-  return { ...data, timestamp: new Date().toISOString() };
-};
-
-// --- 7. PUBLIC API ROUTES (No auth needed) ---
-
-// Health check route
-app.get('/api/health', (req, res) => {
-  const uptime = Math.floor((Date.now() - startTime) / 1000);
-  res.json({ status: "ok", uptime_seconds: uptime });
-});
-
-// GET all public data (Workers, Services, etc.)
-app.get('/api/workers', async (req, res) => {
-  try {
-    const { data } = await getFileFromRepo('data/workers.json');
-    // Group workers by service for the index page
-    const groupedWorkers = {};
-    data.forEach(worker => {
-      const service = worker.service || 'Uncategorized';
-      if (!groupedWorkers[service]) groupedWorkers[service] = [];
-      groupedWorkers[service].push(worker);
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `token ${GITHUB_TOKEN}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
     });
-    res.json(groupedWorkers);
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`GitHub API error: ${JSON.stringify(errorData)}`);
+    }
+    
+    return await response.json();
   } catch (error) {
-    res.status(500).json({ message: "Error fetching workers", error: error.message });
+    console.error(`Error writing to GitHub (${filePath}):`, error.message);
+    throw error; // Re-throw to be caught by route handler
+  }
+};
+
+// --- 5. PUBLIC API ROUTES (For index.html) ---
+
+// GET: Health Check
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: "ok",
+    uptime: Math.floor((Date.now() - appStartTime) / 1000) // Uptime in seconds
+  });
+});
+
+// GET: Public data (Workers & Services)
+app.get('/api/public-data', async (req, res) => {
+  try {
+    // We only expose approved workers publicly
+    const { data: allWorkers } = await readFromGitHub('data/workers.json');
+    const { data: allServices } = await readFromGitHub('data/services.json'); // Assumes you have services.json
+
+    // Group workers by service
+    const groupedWorkers = {};
+    allWorkers.forEach(worker => {
+      if (worker.status === 'available') {
+        const service = worker.service || 'Uncategorized';
+        if (!groupedWorkers[service]) groupedWorkers[service] = [];
+        groupedWorkers[service].push(worker);
+      }
+    });
+
+    res.json({
+      services: allServices,
+      workers: groupedWorkers
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching public data", error: error.message });
   }
 });
 
-// POST a new Chat Booking
+// POST: New Chat Booking
 app.post('/api/chats', async (req, res) => {
   try {
-    const { data, sha } = await getFileFromRepo('data/chats.json');
-    const newBooking = { 
-      id: generateId('CHAT'), 
-      ...addTimestamp(req.body),
+    const { sha, data: chats } = await readFromGitHub('data/chats.json');
+    const newBooking = {
+      id: `CHAT-${nanoid(6).toUpperCase()}`,
+      timestamp: new Date().toISOString(),
       status: "Pending",
-      workerAssigned: ""
+      workerAssigned: "",
+      ...req.body
     };
-    data.push(newBooking);
-    await updateFileInRepo('data/chats.json', data, sha);
+    chats.push(newBooking);
+    await writeToGitHub('data/chats.json', chats, sha, `New chat booking: ${newBooking.id}`);
     res.status(201).json(newBooking);
   } catch (error) {
-    res.status(500).json({ message: "Error creating booking", error: error.message });
+    res.status(500).json({ message: "Error saving chat booking", error: error.message });
   }
 });
 
-// POST a new Call Log
-app.post('/api/calls', async (req, res) => {
-  try {
-    const { data, sha } = await getFileFromRepo('data/calls.json');
-    const newCall = addTimestamp(req.body); // Just add timestamp
-    data.push(newCall);
-    await updateFileInRepo('data/calls.json', data, sha);
-    res.status(201).json(newCall);
-  } catch (error) {
-    res.status(500).json({ message: "Error logging call", error: error.message });
-  }
-});
-
-// POST a new Worker Signup
+// POST: New Worker Signup
 app.post('/api/signups', async (req, res) => {
   try {
-    const { data, sha } = await getFileFromRepo('data/signups.json');
-    const newSignup = { 
-      id: generateId('SIGNUP'), 
-      ...addTimestamp(req.body),
-      status: "Pending Review"
+    const { sha, data: signups } = await readFromGitHub('data/signups.json');
+    const newSignup = {
+      id: `SIGNUP-${nanoid(6).toUpperCase()}`,
+      timestamp: new Date().toISOString(),
+      status: "Pending Review",
+      ...req.body
     };
-    data.push(newSignup);
-    await updateFileInRepo('data/signups.json', data, sha);
+    signups.push(newSignup);
+    await writeToGitHub('data/signups.json', signups, sha, `New worker signup: ${newSignup.name}`);
     res.status(201).json(newSignup);
   } catch (error) {
-    res.status(500).json({ message: "Error creating signup", error: error.message });
+    res.status(500).json({ message: "Error saving signup", error: error.message });
   }
 });
 
-
-// --- 8. ADMIN API ROUTES (Auth required) ---
-
-// GET all data for the dashboard
-app.get('/api/admin/data', protect, async (req, res) => {
-  try {
-    const chats = (await getFileFromRepo('data/chats.json')).data;
-    const calls = (await getFileFromRepo('data/calls.json')).data;
-    const workers = (await getFileFromRepo('data/workers.json')).data;
-    const signups = (await getFileFromRepo('data/signups.json')).data;
-    res.json({ chats, calls, workers, signups });
-  } catch (error) {
-     res.status(500).json({ message: "Error fetching admin data", error: error.message });
-  }
-});
-
-// GET stats for the dashboard
-app.get('/api/stats', protect, async (req, res) => {
-  try {
-    const chats = (await getFileFromRepo('data/chats.json')).data.length;
-    const calls = (await getFileFromRepo('data/calls.json')).data.length;
-    const workers = (await getFileFromRepo('data/workers.json')).data.length;
-    const signups = (await getFileFromRepo('data/signups.json')).data.length;
-    res.json({ chats, calls, workers, signups });
-  } catch (error) {
-     res.status(500).json({ message: "Error fetching stats", error: error.message });
-  }
-});
-
-// POST a new Worker
-app.post('/api/workers', protect, async (req, res) => {
-  try {
-    const { data, sha } = await getFileFromRepo('data/workers.json');
-    const newWorker = { 
-      id: generateId('WORKER'), 
-      ...addTimestamp(req.body)
+// POST: New Call Log (Simple, no auth needed)
+app.post('/api/calls', async (req, res) => {
+   try {
+    const { sha, data: calls } = await readFromGitHub('data/calls.json');
+    const newCall = {
+      timestamp: new Date().toISOString(),
+      ...req.body
     };
-    data.push(newWorker);
-    await updateFileInRepo('data/workers.json', data, sha);
-    res.status(201).json(newWorker);
+    calls.push(newCall);
+    await writeToGitHub('data/calls.json', calls, sha, `New call log: ${newCall.workerName}`);
+    res.status(201).json(newCall);
+  } catch (error) {
+    res.status(500).json({ message: "Error saving call log", error: error.message });
+  }
+});
+
+
+// --- 6. ADMIN API ROUTES (For admin-dashboard.html) ---
+
+// GET: All data for Admin
+app.get('/api/admin/data', authMiddleware, async (req, res) => {
+  try {
+    const { data: workers } = await readFromGitHub('data/workers.json');
+    const { data: chats } = await readFromGitHub('data/chats.json');
+    const { data: calls } = await readFromGitHub('data/calls.json');
+    const { data: signups } = await readFromGitHub('data/signups.json');
+    
+    res.json({ workers, chats, calls, signups });
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching admin data", error: error.message });
+  }
+});
+
+// GET: Stats for Admin
+app.get('/api/stats', authMiddleware, async (req, res) => {
+  try {
+    const { data: workers } = await readFromGitHub('data/workers.json');
+    const { data: chats } = await readFromGitHub('data/chats.json');
+    const { data: calls } = await readFromGitHub('data/calls.json');
+    const { data: signups } = await readFromGitHub('data/signups.json');
+    
+    res.json({
+      totalWorkers: workers.length,
+      totalChats: chats.length,
+      totalCalls: calls.length,
+      pendingSignups: signups.filter(s => s.status === 'Pending Review').length
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching stats", error: error.message });
+  }
+});
+
+// POST: Add a new Worker
+app.post('/api/workers', authMiddleware, async (req, res) => {
+  try {
+    const { sha, data: workers } = await readFromGitHub('data/workers.json');
+    const newWorker = {
+      id: `WORKER-${nanoid(5).toUpperCase()}`,
+      timestamp: new Date().toISOString(),
+      ...req.body
+    };
+    workers.push(newWorker);
+    await writeToGitHub('data/workers.json', workers, sha, `Admin added worker: ${newWorker.name}`);
+    res.status(201).json({ status: "success", message: "Worker added successfully!", data: newWorker });
   } catch (error) {
     res.status(500).json({ message: "Error adding worker", error: error.message });
   }
 });
 
-// PUT (Update) a Booking's Status/Worker
-app.put('/api/update-status/:id', protect, async (req, res) => {
-  const { id } = req.params;
-  const { status, workerAssigned } = req.body;
-  
-  // This route can update EITHER a chat or a signup
-  let filePath;
-  if (id.startsWith('CHAT-')) filePath = 'data/chats.json';
-  else if (id.startsWith('SIGNUP-')) filePath = 'data/signups.json';
-  else return res.status(400).json({ message: "Invalid ID prefix" });
-
+// PUT: Update a Chat Booking (Assign Worker/Status)
+app.put('/api/update-status/:id', authMiddleware, async (req, res) => {
   try {
-    const { data, sha } = await getFileFromRepo(filePath);
-    const itemIndex = data.findIndex(item => item.id === id);
+    const { id } = req.params;
+    const { newStatus, workerName } = req.body;
+    
+    const { sha, data: chats } = await readFromGitHub('data/chats.json');
+    const chatIndex = chats.findIndex(c => c.id === id);
 
-    if (itemIndex === -1) {
-      return res.status(404).json({ message: "Item not found" });
+    if (chatIndex === -1) {
+      return res.status(404).json({ message: "Booking not found" });
     }
+    
+    // Update data
+    if (newStatus) chats[chatIndex].status = newStatus;
+    if (workerName) chats[chatIndex].workerAssigned = workerName;
 
-    // Update fields
-    if (status) data[itemIndex].status = status;
-    if (workerAssigned) data[itemIndex].workerAssigned = workerAssigned;
-
-    await updateFileInRepo(filePath, data, sha);
-    res.json(data[itemIndex]);
+    await writeToGitHub('data/chats.json', chats, sha, `Admin updated booking: ${id}`);
+    res.json({ status: "success", message: "Booking updated", data: chats[chatIndex] });
   } catch (error) {
-    res.status(500).json({ message: "Error updating status", error: error.message });
+    res.status(500).json({ message: "Error updating booking", error: error.message });
   }
 });
 
-// GET (Bonus) Backup route
-app.get('/api/backup', protect, async (req, res) => {
-   try {
-    const { data: chatsData } = await getFileFromRepo('data/chats.json');
-    const backupPath = `backup/chats-${new Date().toISOString().split('T')[0]}.json`;
-    // Pass null for SHA to create a new file
-    await updateFileInRepo(backupPath, chatsData, null); 
-    res.json({ message: `Backup created at ${backupPath}` });
-  } catch (error) {
-     res.status(500).json({ message: "Error creating backup", error: error.message });
-  }
+// We can add DELETE routes for signups/workers later
+
+// --- 7. GLOBAL ERROR HANDLER ---
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).send({ message: 'Something broke!', error: err.message });
 });
 
-
-// --- 9. START SERVER ---
+// --- 8. START SERVER ---
 app.listen(PORT, () => {
-  console.log(`CitySetu API listening on port ${PORT}`);
-  console.log('Repo Owner:', GITHUB_REPO_OWNER);
-  console.log('Repo Name:', GITHUB_REPO_NAME);
+  console.log(`CitySetu Backend is live on port ${PORT}`);
+  if (!GITHUB_TOKEN || !REPO_OWNER || !REPO_NAME || !ADMIN_TOKEN) {
+    console.warn('⚠️ WARNING: Missing one or more critical .env variables (GITHUB_TOKEN, REPO_OWNER, REPO_NAME, ADMIN_TOKEN). API will not function correctly.');
+  }
 });
+
