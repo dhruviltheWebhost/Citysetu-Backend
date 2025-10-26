@@ -16,9 +16,9 @@ const startTime = Date.now();
 const {
   ADMIN_TOKEN,
   GITHUB_TOKEN,
-  GITHUB_REPO_OWNER, // e.g., "DhruvilBarot"
-  GITHUB_REPO_NAME,  // e.g., "citysetu-data-repo"
-  GITHUB_REPO_BRANCH // e.g., "main"
+  "dhruviltheWebhost", // e.g., "DhruvilBarot"
+  "Citysetu-Backend",  // e.g., "citysetu-data-repo"
+  "main" // e.g., "main"
 } = process.env;
 
 // GitHub API URLs
