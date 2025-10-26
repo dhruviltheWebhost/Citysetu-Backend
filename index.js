@@ -15,7 +15,7 @@ const startTime = Date.now();
 // These are your secret keys from Render's .env settings
 const {
   "Dhruvil@6108",
-  GITHUB_TOKEN,
+  "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",
   "dhruviltheWebhost", // e.g., "DhruvilBarot"
   "Citysetu-Backend",  // e.g., "citysetu-data-repo"
   "main" // e.g., "main"
