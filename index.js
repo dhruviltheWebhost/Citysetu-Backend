@@ -162,9 +162,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// 
-// *** ADDED THIS ROUTE TO FIX YOUR ERROR ***
-//
 // GET: All *available* workers for the public frontend
 app.get('/api/workers', async (req, res) => {
   try {
@@ -212,9 +209,6 @@ app.get('/api/public-data', async (req, res) => {
   }
 });
 
-// 
-// *** RENAMED THIS ROUTE ***
-//
 // POST: New Chat Booking (from /api/chats to /api/log/chat)
 app.post('/api/log/chat', async (req, res) => {
   try {
@@ -234,9 +228,6 @@ app.post('/api/log/chat', async (req, res) => {
   }
 });
 
-// 
-// *** RENAMED THIS ROUTE ***
-//
 // POST: New Worker Signup (from /api/signups to /api/workers/signup)
 app.post('/api/workers/signup', async (req, res) => {
   try {
@@ -255,9 +246,6 @@ app.post('/api/workers/signup', async (req, res) => {
   }
 });
 
-// 
-// *** RENAMED THIS ROUTE ***
-//
 // POST: New Call Log (from /api/calls to /api/log/call)
 app.post('/api/log/call', async (req, res) => {
     try {
@@ -307,7 +295,8 @@ app.get('/api/stats', authMiddleware, async (req, res) => {
       pendingSignups: signups.filter(s => s.status === 'Pending Review').length
     });
   } catch (error) {
-    res.status(5Example: 0).json({ message: "Error fetching stats", error: error.message });
+    // *** THIS IS THE FIRST FIX ***
+    res.status(500).json({ message: "Error fetching stats", error: error.message });
   }
 });
 
@@ -338,7 +327,8 @@ app.put('/api/update-status/:id', authMiddleware, async (req, res) => {
     const chatIndex = chats.findIndex(c => c.id === id);
 
     if (chatIndex === -1) {
-      return res.status(4404).json({ message: "Booking not found" });
+      // *** THIS IS THE SECOND FIX ***
+      return res.status(404).json({ message: "Booking not found" });
     }
     
     // Update data
