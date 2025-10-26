@@ -24,7 +24,7 @@ const GITHUB_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/
 
 // CORS Middleware: Allow your frontend(s) to make requests
 const allowedOrigins = [
-  'https://citysetu.github.io', 
+  'https://citysetu.github.io',
   'https://citysetu-admin.vercel.app',
   'https://dhruvilthewebhost.github.io',
   'http://127.0.0.1:5500', // For local testing
@@ -162,7 +162,31 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// GET: Public data (Workers & Services)
+// 
+// *** ADDED THIS ROUTE TO FIX YOUR ERROR ***
+//
+// GET: All *available* workers for the public frontend
+app.get('/api/workers', async (req, res) => {
+  try {
+    // 1. Read all workers from GitHub
+    const { data: allWorkers } = await readFromGitHub('data/workers.json');
+
+    // 2. Filter for only 'available' workers (as your frontend expects)
+    const availableWorkers = allWorkers.filter(worker => worker.status === 'available');
+
+    // 3. Send them in the format the frontend expects
+    res.json({
+      status: 'success',
+      workers: availableWorkers 
+    });
+
+  } catch (error) {
+    console.error("Error fetching workers:", error.message);
+    res.status(500).json({ status: 'error', message: "Error fetching worker data", error: error.message });
+  }
+});
+
+// GET: Public data (Workers & Services) - This is for other uses, like the admin panel
 app.get('/api/public-data', async (req, res) => {
   try {
     // We only expose approved workers publicly
@@ -188,8 +212,11 @@ app.get('/api/public-data', async (req, res) => {
   }
 });
 
-// POST: New Chat Booking
-app.post('/api/chats', async (req, res) => {
+// 
+// *** RENAMED THIS ROUTE ***
+//
+// POST: New Chat Booking (from /api/chats to /api/log/chat)
+app.post('/api/log/chat', async (req, res) => {
   try {
     const { sha, data: chats } = await readFromGitHub('data/chats.json');
     const newBooking = {
@@ -201,14 +228,17 @@ app.post('/api/chats', async (req, res) => {
     };
     chats.push(newBooking);
     await writeToGitHub('data/chats.json', chats, sha, `New chat booking: ${newBooking.id}`);
-    res.status(201).json(newBooking);
+    res.status(201).json({ status: 'success', message: 'Booking logged', data: newBooking });
   } catch (error) {
     res.status(500).json({ message: "Error saving chat booking", error: error.message });
   }
 });
 
-// POST: New Worker Signup
-app.post('/api/signups', async (req, res) => {
+// 
+// *** RENAMED THIS ROUTE ***
+//
+// POST: New Worker Signup (from /api/signups to /api/workers/signup)
+app.post('/api/workers/signup', async (req, res) => {
   try {
     const { sha, data: signups } = await readFromGitHub('data/signups.json');
     const newSignup = {
@@ -219,15 +249,18 @@ app.post('/api/signups', async (req, res) => {
     };
     signups.push(newSignup);
     await writeToGitHub('data/signups.json', signups, sha, `New worker signup: ${newSignup.name}`);
-    res.status(201).json(newSignup);
+    res.status(201).json({ status: 'success', message: 'Signup successful!', data: newSignup });
   } catch (error) {
     res.status(500).json({ message: "Error saving signup", error: error.message });
   }
 });
 
-// POST: New Call Log (Simple, no auth needed)
-app.post('/api/calls', async (req, res) => {
-   try {
+// 
+// *** RENAMED THIS ROUTE ***
+//
+// POST: New Call Log (from /api/calls to /api/log/call)
+app.post('/api/log/call', async (req, res) => {
+    try {
     const { sha, data: calls } = await readFromGitHub('data/calls.json');
     const newCall = {
       timestamp: new Date().toISOString(),
@@ -235,8 +268,9 @@ app.post('/api/calls', async (req, res) => {
     };
     calls.push(newCall);
     await writeToGitHub('data/calls.json', calls, sha, `New call log: ${newCall.workerName}`);
-    res.status(201).json(newCall);
-  } catch (error) {
+    res.status(201).json({ status: 'success', message: 'Call logged', data: newCall });
+  } catch (error)
+ {
     res.status(500).json({ message: "Error saving call log", error: error.message });
   }
 });
@@ -273,7 +307,7 @@ app.get('/api/stats', authMiddleware, async (req, res) => {
       pendingSignups: signups.filter(s => s.status === 'Pending Review').length
     });
   } catch (error) {
-    res.status(500).json({ message: "Error fetching stats", error: error.message });
+    res.status(5Example: 0).json({ message: "Error fetching stats", error: error.message });
   }
 });
 
@@ -304,7 +338,7 @@ app.put('/api/update-status/:id', authMiddleware, async (req, res) => {
     const chatIndex = chats.findIndex(c => c.id === id);
 
     if (chatIndex === -1) {
-      return res.status(404).json({ message: "Booking not found" });
+      return res.status(4404).json({ message: "Booking not found" });
     }
     
     // Update data
@@ -333,4 +367,3 @@ app.listen(PORT, () => {
     console.warn('⚠️ WARNING: Missing one or more critical .env variables (GITHUB_TOKEN, REPO_OWNER, REPO_NAME, ADMIN_TOKEN). API will not function correctly.');
   }
 });
-
