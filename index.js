@@ -26,6 +26,7 @@ const GITHUB_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/
 const allowedOrigins = [
   'https://citysetu.github.io', 
   'https://citysetu-admin.vercel.app',
+  'https://dhruvilthewebhost.github.io',
   'http://127.0.0.1:5500', // For local testing
   'http://localhost:5173'  // For local React dev
 ];
