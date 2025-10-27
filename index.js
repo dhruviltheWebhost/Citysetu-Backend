@@ -123,15 +123,44 @@ app.get('/api/public-data', async (req, res) => {
 });
 
 // POST: New Chat Booking
+// POST: New Chat Booking
 app.post('/api/log/chat', async (req, res) => {
   try {
-    const { customerName, customerPhone, service } = req.body;
+    // 1. Get 'preferredWorker' from the request body
+    const { customerName, customerPhone, service, preferredWorker } = req.body;
+    
     const newBooking = {
       id: `CHAT-${nanoid(6).toUpperCase()}`,
       customerName,
       customerPhone,
-      service
+      service,
+      preferredWorker // 2. Add it to the new booking object
     };
+
+    // 3. Update the SQL query to include the new column
+    const query = `
+      INSERT INTO chats (id, customerName, customerPhone, service, preferredWorker)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `;
+    
+    // 4. Add the new value to the 'values' array
+    const values = [
+        newBooking.id, 
+        newBooking.customerName, 
+        newBooking.customerPhone, 
+        newBooking.service, 
+        newBooking.preferredWorker
+    ];
+    
+    const result = await pool.query(query, values);
+    
+    res.status(201).json({ status: 'success', message: 'Booking logged', data: result.rows[0] });
+  } catch (error) {
+    console.error("Error saving chat booking:", error.message);
+    res.status(500).json({ message: "Error saving chat booking" });
+  }
+});
 
     // SQL query to INSERT data. We use $1, $2, $3 to prevent SQL injection.
     const query = `
