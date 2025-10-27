@@ -2,206 +2,119 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { nanoid } from 'nanoid';
-import { Buffer } from 'buffer';
+import pg from 'pg'; // Import the new 'pg' library
 
 // --- 1. INITIAL SETUP ---
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 const appStartTime = Date.now();
-
-// --- 2. GITHUB API CONFIGURATION ---
-// These are your environment variables from Render
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-const REPO_OWNER = process.env.GITHUB_REPO_OWNER;
-const REPO_NAME = process.env.GITHUB_REPO_NAME;
-const REPO_BRANCH = process.env.GITHUB_REPO_BRANCH || 'main';
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 
-const GITHUB_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/`;
+// --- 2. DATABASE CONFIGURATION ---
+// We now use 'pg.Pool' to connect to our PostgreSQL database
+// Render provides the DATABASE_URL environment variable for us.
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  // If your app is in a different region than your DB, you might need SSL
+  // ssl: { rejectUnauthorized: false } 
+});
+
+// Test the database connection
+pool.query('SELECT NOW()', (err, res) => {
+  if (err) {
+    console.error('⚠️ Database connection error:', err.stack);
+  } else {
+    console.log('✅ Database connected successfully at', res.rows[0].now);
+  }
+});
+
 
 // --- 3. MIDDLEWARE ---
 
-// CORS Middleware: Allow your frontend(s) to make requests
+// CORS Middleware
 const allowedOrigins = [
   'https://citysetu.github.io',
   'https://citysetu-admin.vercel.app',
   'https://dhruvilthewebhost.github.io',
-  'http://127.0.0.1:5500', // For local testing
-  'http://localhost:5173'  // For local React dev
+  'http://127.0.0.1:5500',
+  'http://localhost:5173'
 ];
-
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS policy violation'), false);
     }
-    return callback(null, true);
   },
   methods: "GET,POST,PUT,DELETE,OPTIONS",
   allowedHeaders: "Content-Type, Authorization"
 }));
 
-// Body Parser Middleware: Allow server to read JSON from requests
+// Body Parser Middleware
 app.use(express.json());
 
-// Admin Authentication Middleware: Protects sensitive routes
+// Admin Auth Middleware
 const authMiddleware = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Format: "Bearer YOUR_TOKEN"
-
-  if (token == null) {
-    return res.status(401).json({ message: 'Error: No token provided.' });
-  }
-  if (token !== ADMIN_TOKEN) {
-    return res.status(403).json({ message: 'Error: Invalid token.' });
-  }
-  next(); // Token is valid, proceed to the route
+  const token = authHeader && authHeader.split(' ')[1];
+  if (token == null) return res.status(401).json({ message: 'Error: No token provided.' });
+  if (token !== ADMIN_TOKEN) return res.status(403).json({ message: 'Error: Invalid token.' });
+  next();
 };
 
-// --- 4. GITHUB API HELPER FUNCTIONS ---
-
-/**
- * Reads a JSON file from your GitHub data repository.
- * @param {string} filePath - Path to file, e.g., "data/workers.json"
- */
-const readFromGitHub = async (filePath) => {
-  const url = `${GITHUB_API_URL}${filePath}?ref=${REPO_BRANCH}`;
-  
-  try {
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `token ${GITHUB_TOKEN}`,
-        'Accept': 'application/vnd.github.v3.raw' // Get raw content
-      }
-    });
-
-    if (!response.ok) {
-      // If file not found, return empty array (for POST routes)
-      if (response.status === 404) {
-        console.log(`File not found: ${filePath}. Returning empty array.`);
-        return { sha: null, data: [] };
-      }
-      throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    
-    // To update a file, we need its "SHA"
-    // So we make a second call to get metadata
-    const metaResponse = await fetch(`${GITHUB_API_URL}${filePath}?ref=${REPO_BRANCH}`, {
-        headers: { 'Authorization': `token ${GITHUB_TOKEN}` }
-    });
-    const meta = await metaResponse.json();
-
-    return { sha: meta.sha, data: data };
-
-  } catch (error) {
-    console.error(`Error reading from GitHub (${filePath}):`, error.message);
-    // If any error (e.g., repo not found), return empty
-    return { sha: null, data: [] };
-  }
-};
-
-/**
- * Writes data to a JSON file in your GitHub data repository.
- * @param {string} filePath - Path to file, e.g., "data/workers.json"
- * @param {object} data - The new JSON data to write.
- * @param {string} sha - The 'SHA' of the *old* file (required for updates).
- * @param {string} commitMessage - A commit message.
- */
-const writeToGitHub = async (filePath, data, sha, commitMessage) => {
-  const url = `${GITHUB_API_URL}${filePath}`;
-  
-  // Data must be in Base64
-  const content = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
-
-  const body = {
-    message: commitMessage,
-    content: content,
-    branch: REPO_BRANCH,
-    sha: sha // Include SHA if updating, omit if creating new
-  };
-  
-  // If file didn't exist (sha is null), don't send sha
-  if (!sha) delete body.sha;
-
-  try {
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `token ${GITHUB_TOKEN}`,
-        'Accept': 'application/vnd.github.v3+json',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`GitHub API error: ${JSON.stringify(errorData)}`);
-    }
-    
-    return await response.json();
-  } catch (error) {
-    console.error(`Error writing to GitHub (${filePath}):`, error.message);
-    throw error; // Re-throw to be caught by route handler
-  }
-};
-
+// --- 4. GITHUB HELPER FUNCTIONS ---
+//
+// We no longer need readFromGitHub() or writeToGitHub()!
+// They are replaced with fast SQL queries.
+//
 // --- 5. PUBLIC API ROUTES (For index.html) ---
 
 // GET: Health Check
 app.get('/api/health', (req, res) => {
   res.json({
     status: "ok",
-    uptime: Math.floor((Date.now() - appStartTime) / 1000) // Uptime in seconds
+    uptime: Math.floor((Date.now() - appStartTime) / 1000)
   });
 });
 
-// GET: All *available* workers for the public frontend
+// GET: All *available* workers
 app.get('/api/workers', async (req, res) => {
   try {
-    // 1. Read all workers from GitHub
-    const { data: allWorkers } = await readFromGitHub('data/workers.json');
+    // 1. Run a SQL query to get available workers
+    const query = "SELECT * FROM workers WHERE status = 'available'";
+    const result = await pool.query(query);
 
-    // 2. Filter for only 'available' workers (as your frontend expects)
-    const availableWorkers = allWorkers.filter(worker => worker.status === 'available');
-
-    // 3. Send them in the format the frontend expects
+    // 2. Send them in the format the frontend expects
     res.json({
       status: 'success',
-      workers: availableWorkers 
+      workers: result.rows // 'rows' contains the array of data
     });
 
   } catch (error) {
     console.error("Error fetching workers:", error.message);
-    res.status(500).json({ status: 'error', message: "Error fetching worker data", error: error.message });
+    res.status(500).json({ status: 'error', message: "Error fetching worker data" });
   }
 });
 
-// GET: Public data (Workers & Services) - This is for other uses, like the admin panel
+// GET: Public data (Not used in your current frontend, but good to have)
 app.get('/api/public-data', async (req, res) => {
   try {
-    // We only expose approved workers publicly
-    const { data: allWorkers } = await readFromGitHub('data/workers.json');
-    const { data: allServices } = await readFromGitHub('data/services.json'); // Assumes you have services.json
+    const workersResult = await pool.query("SELECT * FROM workers WHERE status = 'available'");
+    // You'll need to create a 'services' table if you want this
+    // const servicesResult = await pool.query("SELECT * FROM services");
 
-    // Group workers by service
     const groupedWorkers = {};
-    allWorkers.forEach(worker => {
-      if (worker.status === 'available') {
-        const service = worker.service || 'Uncategorized';
-        if (!groupedWorkers[service]) groupedWorkers[service] = [];
-        groupedWorkers[service].push(worker);
-      }
+    workersResult.rows.forEach(worker => {
+      const service = worker.service || 'Uncategorized';
+      if (!groupedWorkers[service]) groupedWorkers[service] = [];
+      groupedWorkers[service].push(worker);
     });
 
     res.json({
-      services: allServices,
+      // services: servicesResult.rows,
+      services: [], // Placeholder
       workers: groupedWorkers
     });
   } catch (error) {
@@ -209,57 +122,77 @@ app.get('/api/public-data', async (req, res) => {
   }
 });
 
-// POST: New Chat Booking (from /api/chats to /api/log/chat)
+// POST: New Chat Booking
 app.post('/api/log/chat', async (req, res) => {
   try {
-    const { sha, data: chats } = await readFromGitHub('data/chats.json');
+    const { customerName, customerPhone, service } = req.body;
     const newBooking = {
       id: `CHAT-${nanoid(6).toUpperCase()}`,
-      timestamp: new Date().toISOString(),
-      status: "Pending",
-      workerAssigned: "",
-      ...req.body
+      customerName,
+      customerPhone,
+      service
     };
-    chats.push(newBooking);
-    await writeToGitHub('data/chats.json', chats, sha, `New chat booking: ${newBooking.id}`);
-    res.status(201).json({ status: 'success', message: 'Booking logged', data: newBooking });
+
+    // SQL query to INSERT data. We use $1, $2, $3 to prevent SQL injection.
+    const query = `
+      INSERT INTO chats (id, customerName, customerPhone, service)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `;
+    const values = [newBooking.id, newBooking.customerName, newBooking.customerPhone, newBooking.service];
+    
+    const result = await pool.query(query, values);
+    
+    res.status(201).json({ status: 'success', message: 'Booking logged', data: result.rows[0] });
   } catch (error) {
-    res.status(500).json({ message: "Error saving chat booking", error: error.message });
+    console.error("Error saving chat booking:", error.message);
+    res.status(500).json({ message: "Error saving chat booking" });
   }
 });
 
-// POST: New Worker Signup (from /api/signups to /api/workers/signup)
+// POST: New Worker Signup
 app.post('/api/workers/signup', async (req, res) => {
   try {
-    const { sha, data: signups } = await readFromGitHub('data/signups.json');
+    const { name, phone, service, city, pincode, address } = req.body;
     const newSignup = {
       id: `SIGNUP-${nanoid(6).toUpperCase()}`,
-      timestamp: new Date().toISOString(),
-      status: "Pending Review",
-      ...req.body
+      name, phone, service, city, pincode, address
     };
-    signups.push(newSignup);
-    await writeToGitHub('data/signups.json', signups, sha, `New worker signup: ${newSignup.name}`);
-    res.status(201).json({ status: 'success', message: 'Signup successful!', data: newSignup });
+
+    const query = `
+      INSERT INTO signups (id, name, phone, service, city, pincode, address)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `;
+    const values = [newSignup.id, newSignup.name, newSignup.phone, newSignup.service, newSignup.city, newSignup.pincode, newSignup.address];
+
+    const result = await pool.query(query, values);
+
+    res.status(201).json({ status: 'success', message: 'Signup successful!', data: result.rows[0] });
   } catch (error) {
-    res.status(500).json({ message: "Error saving signup", error: error.message });
+    console.error("Error saving signup:", error.message);
+    res.status(500).json({ message: "Error saving signup" });
   }
 });
 
-// POST: New Call Log (from /api/calls to /api/log/call)
+// POST: New Call Log
 app.post('/api/log/call', async (req, res) => {
-    try {
-    const { sha, data: calls } = await readFromGitHub('data/calls.json');
-    const newCall = {
-      timestamp: new Date().toISOString(),
-      ...req.body
-    };
-    calls.push(newCall);
-    await writeToGitHub('data/calls.json', calls, sha, `New call log: ${newCall.workerName}`);
-    res.status(201).json({ status: 'success', message: 'Call logged', data: newCall });
-  } catch (error)
- {
-    res.status(500).json({ message: "Error saving call log", error: error.message });
+  try {
+    const { workerId, workerName, customerPhone } = req.body;
+
+    const query = `
+      INSERT INTO calls (workerId, workerName, customerPhone)
+      VALUES ($1, $2, $3)
+      RETURNING *
+    `;
+    const values = [workerId, workerName, customerPhone];
+
+    const result = await pool.query(query, values);
+
+    res.status(201).json({ status: 'success', message: 'Call logged', data: result.rows[0] });
+  } catch (error) {
+    console.error("Error saving call log:", error.message);
+    res.status(500).json({ message: "Error saving call log" });
   }
 });
 
@@ -269,51 +202,75 @@ app.post('/api/log/call', async (req, res) => {
 // GET: All data for Admin
 app.get('/api/admin/data', authMiddleware, async (req, res) => {
   try {
-    const { data: workers } = await readFromGitHub('data/workers.json');
-    const { data: chats } = await readFromGitHub('data/chats.json');
-    const { data: calls } = await readFromGitHub('data/calls.json');
-    const { data: signups } = await readFromGitHub('data/signups.json');
+    // We run all queries in parallel for speed
+    const [workers, chats, calls, signups] = await Promise.all([
+      pool.query('SELECT * FROM workers ORDER BY timestamp DESC'),
+      pool.query('SELECT * FROM chats ORDER BY timestamp DESC'),
+      pool.query('SELECT * FROM calls ORDER BY timestamp DESC'),
+      pool.query('SELECT * FROM signups ORDER BY timestamp DESC')
+    ]);
     
-    res.json({ workers, chats, calls, signups });
+    res.json({
+      workers: workers.rows,
+      chats: chats.rows,
+      calls: calls.rows,
+      signups: signups.rows
+    });
   } catch (error) {
-    res.status(500).json({ message: "Error fetching admin data", error: error.message });
+    console.error("Error fetching admin data:", error.message);
+    res.status(500).json({ message: "Error fetching admin data" });
   }
 });
 
 // GET: Stats for Admin
 app.get('/api/stats', authMiddleware, async (req, res) => {
   try {
-    const { data: workers } = await readFromGitHub('data/workers.json');
-    const { data: chats } = await readFromGitHub('data/chats.json');
-    const { data: calls } = await readFromGitHub('data/calls.json');
-    const { data: signups } = await readFromGitHub('data/signups.json');
+    // We can get counts directly from the database, which is very fast
+    const [workers, chats, calls, signups] = await Promise.all([
+      pool.query("SELECT COUNT(*) FROM workers"),
+      pool.query("SELECT COUNT(*) FROM chats"),
+      pool.query("SELECT COUNT(*) FROM calls"),
+      pool.query("SELECT COUNT(*) FROM signups WHERE status = 'Pending Review'")
+    ]);
     
     res.json({
-      totalWorkers: workers.length,
-      totalChats: chats.length,
-      totalCalls: calls.length,
-      pendingSignups: signups.filter(s => s.status === 'Pending Review').length
+      totalWorkers: parseInt(workers.rows[0].count, 10),
+      totalChats: parseInt(chats.rows[0].count, 10),
+      totalCalls: parseInt(calls.rows[0].count, 10),
+      pendingSignups: parseInt(signups.rows[0].count, 10)
     });
   } catch (error) {
-    // *** THIS IS THE FIRST FIX ***
-    res.status(500).json({ message: "Error fetching stats", error: error.message });
+    console.error("Error fetching stats:", error.message);
+    res.status(500).json({ message: "Error fetching stats" });
   }
 });
 
 // POST: Add a new Worker
 app.post('/api/workers', authMiddleware, async (req, res) => {
   try {
-    const { sha, data: workers } = await readFromGitHub('data/workers.json');
+    const { name, phone, service, city, pincode, status } = req.body;
     const newWorker = {
       id: `WORKER-${nanoid(5).toUpperCase()}`,
-      timestamp: new Date().toISOString(),
-      ...req.body
+      name, phone, service, city, pincode, status
     };
-    workers.push(newWorker);
-    await writeToGitHub('data/workers.json', workers, sha, `Admin added worker: ${newWorker.name}`);
-    res.status(201).json({ status: "success", message: "Worker added successfully!", data: newWorker });
+
+    const query = `
+      INSERT INTO workers (id, name, phone, service, city, pincode, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `;
+    const values = [newWorker.id, newWorker.name, newWorker.phone, newWorker.service, newWorker.city, newWorker.pincode, newWorker.status];
+
+    const result = await pool.query(query, values);
+
+    res.status(201).json({ status: "success", message: "Worker added successfully!", data: result.rows[0] });
   } catch (error) {
-    res.status(500).json({ message: "Error adding worker", error: error.message });
+    console.error("Error adding worker:", error.message);
+    // Handle specific error for duplicate phone number
+    if (error.code === '23505' && error.constraint === 'workers_phone_key') {
+      return res.status(409).json({ message: "Error: A worker with this phone number already exists." });
+    }
+    res.status(500).json({ message: "Error adding worker" });
   }
 });
 
@@ -322,27 +279,50 @@ app.put('/api/update-status/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
     const { newStatus, workerName } = req.body;
-    
-    const { sha, data: chats } = await readFromGitHub('data/chats.json');
-    const chatIndex = chats.findIndex(c => c.id === id);
 
-    if (chatIndex === -1) {
-      // *** THIS IS THE SECOND FIX ***
+    // Build the query dynamically based on what's provided
+    const fields = [];
+    const values = [];
+    let argCount = 1;
+
+    if (newStatus) {
+      fields.push(`status = $${argCount++}`);
+      values.push(newStatus);
+    }
+    if (workerName) {
+      fields.push(`workerAssigned = $${argCount++}`);
+      values.push(workerName);
+    }
+
+    if (fields.length === 0) {
+      return res.status(400).json({ message: "No fields to update" });
+    }
+
+    values.push(id); // Add the 'id' for the WHERE clause
+    const query = `
+      UPDATE chats
+      SET ${fields.join(', ')}
+      WHERE id = $${argCount}
+      RETURNING *
+    `;
+    
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
       return res.status(404).json({ message: "Booking not found" });
     }
-    
-    // Update data
-    if (newStatus) chats[chatIndex].status = newStatus;
-    if (workerName) chats[chatIndex].workerAssigned = workerName;
 
-    await writeToGitHub('data/chats.json', chats, sha, `Admin updated booking: ${id}`);
-    res.json({ status: "success", message: "Booking updated", data: chats[chatIndex] });
+    res.json({ status: "success", message: "Booking updated", data: result.rows[0] });
   } catch (error) {
-    res.status(500).json({ message: "Error updating booking", error: error.message });
+    console.error("Error updating booking:", error.message);
+    res.status(500).json({ message: "Error updating booking" });
   }
 });
 
-// We can add DELETE routes for signups/workers later
+// We can add DELETE routes later, e.g.:
+// app.delete('/api/workers/:id', authMiddleware, async (req, res) => { ... })
+// app.delete('/api/signups/:id', authMiddleware, async (req, res) => { ... })
+
 
 // --- 7. GLOBAL ERROR HANDLER ---
 app.use((err, req, res, next) => {
@@ -353,7 +333,10 @@ app.use((err, req, res, next) => {
 // --- 8. START SERVER ---
 app.listen(PORT, () => {
   console.log(`CitySetu Backend is live on port ${PORT}`);
-  if (!GITHUB_TOKEN || !REPO_OWNER || !REPO_NAME || !ADMIN_TOKEN) {
-    console.warn('⚠️ WARNING: Missing one or more critical .env variables (GITHUB_TOKEN, REPO_OWNER, REPO_NAME, ADMIN_TOKEN). API will not function correctly.');
+  if (!process.env.DATABASE_URL) {
+    console.warn('⚠️ WARNING: Missing DATABASE_URL. API will not connect to database.');
+  }
+  if (!ADMIN_TOKEN) {
+    console.warn('⚠️ WARNING: Missing ADMIN_TOKEN. Admin routes will be locked.');
   }
 });
