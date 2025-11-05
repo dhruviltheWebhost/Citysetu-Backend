@@ -158,6 +158,35 @@ app.post('/api/log/call', async (req, res) => {
   }
 });
 
+// --- [NEW] ADMIN LOGIN ROUTE ---
+app.post('/api/admin/login', (req, res) => {
+  try {
+    const { password } = req.body;
+
+    // 1. Check for the ADMIN_PASSWORD from your .env file
+    if (!process.env.ADMIN_PASSWORD) {
+      console.error('CRITICAL: ADMIN_PASSWORD is not set in .env');
+      return res.status(500).json({ message: 'Admin password not set on server' });
+    }
+
+    // 2. Check if the password is correct
+    if (!password || password !== process.env.ADMIN_PASSWORD) {
+      return res.status(401).json({ message: 'Invalid password' });
+    }
+
+    // 3. Send back the ADMIN_TOKEN
+    res.json({ 
+      status: 'success', 
+      message: 'Login successful',
+      token: ADMIN_TOKEN 
+    });
+
+  } catch (error) {
+    console.error("Login Error:", error.message);
+    res.status(500).json({ message: "Server error during login" });
+  }
+});
+
 
 // --- 6. ADMIN API ROUTES (For admin-dashboard.html) ---
 app.get('/api/admin/data', authMiddleware, async (req, res) => {
@@ -166,7 +195,7 @@ app.get('/api/admin/data', authMiddleware, async (req, res) => {
       pool.query('SELECT * FROM workers ORDER BY timestamp DESC'),
       pool.query('SELECT * FROM chats ORDER BY timestamp DESC'),
       pool.query('SELECT * FROM calls ORDER BY timestamp DESC'),
-      pool.query('SELECT * FROM signups ORDER BY timestamp DESC')
+      pool.query("SELECT * FROM signups WHERE status = 'Pending Review' ORDER BY timestamp DESC") // Only get pending
     ]);
     
     res.json({
@@ -269,6 +298,25 @@ app.put('/api/update-status/:id', authMiddleware, async (req, res) => {
   }
 });
 
+// --- [NEW] DELETE SIGNUP ROUTE ---
+app.delete('/api/signups/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const query = 'DELETE FROM signups WHERE id = $1 RETURNING *';
+    const result = await pool.query(query, [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Signup not found" });
+    }
+    
+    res.json({ status: 'success', message: 'Signup deleted successfully' });
+  
+  } catch (error) {
+    console.error("Error deleting signup:", error.message);
+    res.status(5Do0).json({ message: "Error deleting signup" });
+  }
+});
+
 
 // --- 7. GLOBAL ERROR HANDLER ---
 app.use((err, req, res, next) => {
@@ -284,5 +332,9 @@ app.listen(PORT, () => {
   }
   if (!ADMIN_TOKEN) {
     console.warn('⚠️ WARNING: Missing ADMIN_TOKEN. Admin routes will be locked.');
+  }
+  // --- [NEW] ADDED PASSWORD CHECK ---
+  if (!process.env.ADMIN_PASSWORD) {
+    console.warn('⚠️ WARNING: Missing ADMIN_PASSWORD. Admin login will fail.');
   }
 });
