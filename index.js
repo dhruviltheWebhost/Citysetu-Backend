@@ -299,6 +299,7 @@ app.put('/api/update-status/:id', authMiddleware, async (req, res) => {
 });
 
 // --- [NEW] DELETE SIGNUP ROUTE ---
+// --- [FIXED] DELETE SIGNUP ROUTE ---
 app.delete('/api/signups/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
@@ -313,10 +314,10 @@ app.delete('/api/signups/:id', authMiddleware, async (req, res) => {
   
   } catch (error) {
     console.error("Error deleting signup:", error.message);
-    res.status(5Do0).json({ message: "Error deleting signup" });
+    // --- THIS LINE IS NOW CORRECT ---
+    res.status(500).json({ message: "Error deleting signup" }); 
   }
 });
-
 
 // --- 7. GLOBAL ERROR HANDLER ---
 app.use((err, req, res, next) => {
