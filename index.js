@@ -299,7 +299,6 @@ app.put('/api/update-status/:id', authMiddleware, async (req, res) => {
 });
 
 // --- [NEW] DELETE SIGNUP ROUTE ---
-// --- [FIXED] DELETE SIGNUP ROUTE ---
 app.delete('/api/signups/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
@@ -314,10 +313,58 @@ app.delete('/api/signups/:id', authMiddleware, async (req, res) => {
   
   } catch (error) {
     console.error("Error deleting signup:", error.message);
-    // --- THIS LINE IS NOW CORRECT ---
     res.status(500).json({ message: "Error deleting signup" }); 
   }
 });
+
+// --- [NEW] EDIT WORKER ROUTE ---
+app.put('/api/workers/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Get all fields from the body
+    const { name, phone, service, city, pincode, status } = req.body;
+
+    const query = `
+      UPDATE workers 
+      SET name = $1, phone = $2, service = $3, city = $4, pincode = $5, status = $6
+      WHERE id = $7
+      RETURNING *
+    `;
+    const values = [name, phone, service, city, pincode, status, id];
+    
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Worker not found" });
+    }
+    
+    res.json({ status: "success", message: "Worker updated!", data: result.rows[0] });
+
+  } catch (error) {
+    console.error("Error updating worker:", error.message);
+    res.status(500).json({ message: "Error updating worker" });
+  }
+});
+
+// --- [NEW] DELETE WORKER ROUTE ---
+app.delete('/api/workers/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const query = 'DELETE FROM workers WHERE id = $1 RETURNING *';
+    const result = await pool.query(query, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Worker not found" });
+    }
+    
+    res.json({ status: 'success', message: 'Worker deleted successfully' });
+  
+  } catch (error) {
+    console.error("Error deleting worker:", error.message);
+    res.status(500).json({ message: "Error deleting worker" });
+  }
+});
+
 
 // --- 7. GLOBAL ERROR HANDLER ---
 app.use((err, req, res, next) => {
