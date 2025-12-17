@@ -14,16 +14,21 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 // --- 2. DATABASE CONFIGURATION ---
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false, // REQUIRED for Neon
+  },
 });
 
 // Test the database connection
-pool.query('SELECT NOW()', (err, res) => {
-  if (err) {
-    console.error('⚠️ Database connection error:', err.stack);
-  } else {
-    console.log('✅ Database connected successfully at', res.rows[0].now);
-  }
-});
+pool
+  .connect()
+  .then(client => {
+    console.log('✅ Database connected successfully (Neon)');
+    client.release();
+  })
+  .catch(err => {
+    console.error('⚠️ Database connection error:', err.message);
+  });
 
 
 // --- 3. MIDDLEWARE ---
