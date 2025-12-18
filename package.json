@@ -1,11 +1,14 @@
 {
   "name": "citysetu-backend",
   "version": "1.0.0",
-  "description": "Backend for CitySetu, using PostgreSQL database.",
-  "main": "index.js",
+  "description": "Backend for CitySetu creative professionals platform",
   "type": "module",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "cors": "^2.8.5",
