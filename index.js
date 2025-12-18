@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import pg from 'pg';
-import { v4 as uuidv4 } from 'uuid';
+import { nanoid } from 'nanoid';
 
 // ================================
 // 1. INITIAL SETUP
@@ -74,7 +74,7 @@ app.post('/api/professionals/signup', async (req, res) => {
       return res.status(400).json({ message: 'Missing fields' });
     }
 
-    const professionalId = uuidv4();
+    const professionalId = nanoid();
 
     await pool.query(
       "INSERT INTO professionals (id, name, phone) VALUES ($1,$2,$3)",
@@ -151,7 +151,7 @@ app.post('/api/leads', async (req, res) => {
       requirement
     } = req.body;
 
-    const leadId = uuidv4();
+    const leadId = nanoid();
     const assignedByPlatform = !professional_id;
 
     await pool.query(
@@ -190,7 +190,7 @@ app.post('/api/chat', async (req, res) => {
       INSERT INTO chats (id, lead_id, sender, message)
       VALUES ($1,$2,$3,$4)
       `,
-      [uuidv4(), lead_id, sender, message]
+      [nanoid(), lead_id, sender, message]
     );
 
     res.json({ message: 'Message saved' });
