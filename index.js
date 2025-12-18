@@ -70,6 +70,19 @@ app.get('/api/health', (req, res) => {
     uptime: Math.floor((Date.now() - appStartTime) / 1000)
   });
 });
+// GET: List all active services
+app.get('/api/services', async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, name, category FROM services WHERE active = true ORDER BY id"
+    );
+    res.json({ status: 'success', services: result.rows });
+  } catch (error) {
+    console.error("Error fetching services:", error.message);
+    res.status(500).json({ status: 'error', message: 'Failed to fetch services' });
+  }
+});
+
 
 // GET: All *available* workers
 app.get('/api/workers', async (req, res) => {
