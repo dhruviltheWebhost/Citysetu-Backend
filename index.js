@@ -1,406 +1,207 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { nanoid } from 'nanoid';
-import pg from 'pg'; // Import the new 'pg' library
+import pg from 'pg';
+import { v4 as uuidv4 } from 'uuid';
 
-// --- 1. INITIAL SETUP ---
+// ================================
+// 1. INITIAL SETUP
+// ================================
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
-const appStartTime = Date.now();
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 
-// --- 2. DATABASE CONFIGURATION ---
+// ================================
+// 2. DATABASE (Neon PostgreSQL)
+// ================================
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false, // REQUIRED for Neon
-  },
+  ssl: { rejectUnauthorized: false }
 });
 
-// Test the database connection
-pool
-  .connect()
+pool.connect()
   .then(client => {
     console.log('✅ Database connected successfully (Neon)');
     client.release();
   })
   .catch(err => {
-    console.error('⚠️ Database connection error:', err.message);
+    console.error('❌ Database connection error:', err.message);
   });
 
-
-// --- 3. MIDDLEWARE ---
-const allowedOrigins = [
-  'https://citysetu.github.io',
-  'https://citysetu-admin.vercel.app',
-  'https://dhruvilthewebhost.github.io',
-  'http://127.0.0.1:5500',
-  'http://localhost:5173'
-];
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('CORS policy violation'), false);
-    }
-  },
-  methods: "GET,POST,PUT,DELETE,OPTIONS",
-  allowedHeaders: "Content-Type, Authorization"
-}));
-
+// ================================
+// 3. MIDDLEWARE
+// ================================
+app.use(cors());
 app.use(express.json());
 
 const authMiddleware = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (token == null) return res.status(401).json({ message: 'Error: No token provided.' });
-  if (token !== ADMIN_TOKEN) return res.status(403).json({ message: 'Error: Invalid token.' });
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ message: 'No token provided' });
+  if (token !== ADMIN_TOKEN) return res.status(403).json({ message: 'Invalid token' });
   next();
 };
 
-// --- 5. PUBLIC API ROUTES (For index.html) ---
-
-// GET: Health Check
+// ================================
+// 4. BASIC ROUTES
+// ================================
 app.get('/api/health', (req, res) => {
-  res.json({
-    status: "ok",
-    uptime: Math.floor((Date.now() - appStartTime) / 1000)
-  });
+  res.json({ status: 'ok' });
 });
-// GET: List all active services
+
+// ================================
+// 5. SERVICES
+// ================================
 app.get('/api/services', async (req, res) => {
   try {
     const result = await pool.query(
       "SELECT id, name, category FROM services WHERE active = true ORDER BY id"
     );
-    res.json({ status: 'success', services: result.rows });
-  } catch (error) {
-    console.error("Error fetching services:", error.message);
-    res.status(500).json({ status: 'error', message: 'Failed to fetch services' });
+    res.json({ services: result.rows });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch services' });
   }
 });
 
-
-// GET: All *available* workers
-app.get('/api/workers', async (req, res) => {
+// ================================
+// 6. PROFESSIONAL SIGNUP
+// ================================
+app.post('/api/professionals/signup', async (req, res) => {
   try {
-    const query = "SELECT * FROM workers WHERE status = 'available'";
-    const result = await pool.query(query);
-    res.json({
-      status: 'success',
-      workers: result.rows
-    });
-  } catch (error) {
-    console.error("Error fetching workers:", error.message);
-    res.status(500).json({ status: 'error', message: "Error fetching worker data" });
-  }
-});
+    const { name, phone, serviceIds } = req.body;
 
-// POST: New Chat Booking (This is the one we updated)
-app.post('/api/log/chat', async (req, res) => {
-  try {
-    const { customerName, customerPhone, service, preferredWorker } = req.body;
-    
-    const newBooking = {
-      id: `CHAT-${nanoid(6).toUpperCase()}`,
-      customerName,
-      customerPhone,
-      service,
-      preferredWorker 
-    };
-
-    const query = `
-      INSERT INTO chats (id, customerName, customerPhone, service, preferredWorker)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING *
-    `;
-    
-    const values = [
-        newBooking.id, 
-        newBooking.customerName, 
-        newBooking.customerPhone, 
-        newBooking.service, 
-        newBooking.preferredWorker
-    ];
-    
-    const result = await pool.query(query, values);
-    
-    res.status(201).json({ status: 'success', message: 'Booking logged', data: result.rows[0] });
-  } catch (error) {
-    console.error("Error saving chat booking:", error.message);
-    res.status(500).json({ message: "Error saving chat booking" });
-  }
-});
-
-// POST: New Worker Signup
-app.post('/api/workers/signup', async (req, res) => {
-  try {
-    const { name, phone, service, city, pincode, address } = req.body;
-    const newSignup = {
-      id: `SIGNUP-${nanoid(6).toUpperCase()}`,
-      name, phone, service, city, pincode, address
-    };
-
-    const query = `
-      INSERT INTO signups (id, name, phone, service, city, pincode, address)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING *
-    `;
-    const values = [newSignup.id, newSignup.name, newSignup.phone, newSignup.service, newSignup.city, newSignup.pincode, newSignup.address];
-    const result = await pool.query(query, values);
-    res.status(201).json({ status: 'success', message: 'Signup successful!', data: result.rows[0] });
-  } catch (error) {
-    console.error("Error saving signup:", error.message);
-    res.status(500).json({ message: "Error saving signup" });
-  }
-});
-
-// POST: New Call Log
-app.post('/api/log/call', async (req, res) => {
-  try {
-    const { workerId, workerName, customerPhone } = req.body;
-    const query = `
-      INSERT INTO calls (workerId, workerName, customerPhone)
-      VALUES ($1, $2, $3)
-      RETURNING *
-    `;
-    const values = [workerId, workerName, customerPhone];
-    const result = await pool.query(query, values);
-    res.status(201).json({ status: 'success', message: 'Call logged', data: result.rows[0] });
-  } catch (error) {
-    console.error("Error saving call log:", error.message);
-    res.status(500).json({ message: "Error saving call log" });
-  }
-});
-
-// --- [NEW] ADMIN LOGIN ROUTE ---
-app.post('/api/admin/login', (req, res) => {
-  try {
-    const { password } = req.body;
-
-    // 1. Check for the ADMIN_PASSWORD from your .env file
-    if (!process.env.ADMIN_PASSWORD) {
-      console.error('CRITICAL: ADMIN_PASSWORD is not set in .env');
-      return res.status(500).json({ message: 'Admin password not set on server' });
+    if (!name || !phone || !serviceIds?.length) {
+      return res.status(400).json({ message: 'Missing fields' });
     }
 
-    // 2. Check if the password is correct
-    if (!password || password !== process.env.ADMIN_PASSWORD) {
-      return res.status(401).json({ message: 'Invalid password' });
+    const professionalId = uuidv4();
+
+    await pool.query(
+      "INSERT INTO professionals (id, name, phone) VALUES ($1,$2,$3)",
+      [professionalId, name, phone]
+    );
+
+    for (const serviceId of serviceIds) {
+      await pool.query(
+        "INSERT INTO professional_services (professional_id, service_id) VALUES ($1,$2)",
+        [professionalId, serviceId]
+      );
     }
 
-    // 3. Send back the ADMIN_TOKEN
-    res.json({ 
-      status: 'success', 
-      message: 'Login successful',
-      token: ADMIN_TOKEN 
+    res.status(201).json({
+      message: 'Signup successful. Waiting for admin approval.'
     });
 
-  } catch (error) {
-    console.error("Login Error:", error.message);
-    res.status(500).json({ message: "Server error during login" });
+  } catch (err) {
+    res.status(500).json({ message: 'Signup failed' });
   }
 });
 
-
-// --- 6. ADMIN API ROUTES (For admin-dashboard.html) ---
-app.get('/api/admin/data', authMiddleware, async (req, res) => {
+// ================================
+// 7. ADMIN – APPROVE PROFESSIONAL
+// ================================
+app.put('/api/admin/approve/:id', authMiddleware, async (req, res) => {
   try {
-    const [workers, chats, calls, signups] = await Promise.all([
-      pool.query('SELECT * FROM workers ORDER BY timestamp DESC'),
-      pool.query('SELECT * FROM chats ORDER BY timestamp DESC'),
-      pool.query('SELECT * FROM calls ORDER BY timestamp DESC'),
-      pool.query("SELECT * FROM signups WHERE status = 'Pending Review' ORDER BY timestamp DESC") // Only get pending
-    ]);
-    
-    res.json({
-      workers: workers.rows,
-      chats: chats.rows,
-      calls: calls.rows,
-      signups: signups.rows
-    });
-  } catch (error) {
-    console.error("Error fetching admin data:", error.message);
-    res.status(500).json({ message: "Error fetching admin data" });
+    const result = await pool.query(
+      "UPDATE professionals SET approved = true WHERE id = $1 RETURNING *",
+      [req.params.id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({ message: 'Professional not found' });
+    }
+
+    res.json({ professional: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ message: 'Approval failed' });
   }
 });
 
-app.get('/api/stats', authMiddleware, async (req, res) => {
+// ================================
+// 8. LIST APPROVED PROFESSIONALS BY SERVICE
+// ================================
+app.get('/api/professionals/:serviceId', async (req, res) => {
   try {
-    const [workers, chats, calls, signups] = await Promise.all([
-      pool.query("SELECT COUNT(*) FROM workers"),
-      pool.query("SELECT COUNT(*) FROM chats"),
-      pool.query("SELECT COUNT(*) FROM calls"),
-      pool.query("SELECT COUNT(*) FROM signups WHERE status = 'Pending Review'")
-    ]);
-    
-    res.json({
-      totalWorkers: parseInt(workers.rows[0].count, 10),
-      totalChats: parseInt(chats.rows[0].count, 10),
-      totalCalls: parseInt(calls.rows[0].count, 10),
-      pendingSignups: parseInt(signups.rows[0].count, 10)
-    });
-  } catch (error) {
-    console.error("Error fetching stats:", error.message);
-    res.status(500).json({ message: "Error fetching stats" });
+    const result = await pool.query(
+      `
+      SELECT p.id, p.name
+      FROM professionals p
+      JOIN professional_services ps ON p.id = ps.professional_id
+      WHERE ps.service_id = $1 AND p.approved = true
+      `,
+      [req.params.serviceId]
+    );
+
+    res.json({ professionals: result.rows });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch professionals' });
   }
 });
 
-app.post('/api/workers', authMiddleware, async (req, res) => {
+// ================================
+// 9. CREATE LEAD (Customer Request)
+// ================================
+app.post('/api/leads', async (req, res) => {
   try {
-    const { name, phone, service, city, pincode, status } = req.body;
-    const newWorker = {
-      id: `WORKER-${nanoid(5).toUpperCase()}`,
-      name, phone, service, city, pincode, status
-    };
+    const {
+      service_id,
+      professional_id,
+      customer_name,
+      customer_phone,
+      requirement
+    } = req.body;
 
-    const query = `
-      INSERT INTO workers (id, name, phone, service, city, pincode, status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING *
-    `;
-    const values = [newWorker.id, newWorker.name, newWorker.phone, newWorker.service, newWorker.city, newWorker.pincode, newWorker.status];
-    const result = await pool.query(query, values);
-    res.status(201).json({ status: "success", message: "Worker added successfully!", data: result.rows[0] });
-  } catch (error) {
-    console.error("Error adding worker:", error.message);
-    if (error.code === '23505' && error.constraint === 'workers_phone_key') {
-      return res.status(409).json({ message: "Error: A worker with this phone number already exists." });
-    }
-    res.status(500).json({ message: "Error adding worker" });
+    const leadId = uuidv4();
+    const assignedByPlatform = !professional_id;
+
+    await pool.query(
+      `
+      INSERT INTO leads
+      (id, service_id, professional_id, customer_name, customer_phone, requirement, assigned_by_platform)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `,
+      [
+        leadId,
+        service_id,
+        professional_id || null,
+        customer_name,
+        customer_phone,
+        requirement,
+        assignedByPlatform
+      ]
+    );
+
+    res.status(201).json({ message: 'Lead created successfully' });
+
+  } catch (err) {
+    res.status(500).json({ message: 'Lead creation failed' });
   }
 });
 
-app.put('/api/update-status/:id', authMiddleware, async (req, res) => {
+// ================================
+// 10. PLATFORM CHAT (LOG ONLY)
+// ================================
+app.post('/api/chat', async (req, res) => {
   try {
-    const { id } = req.params;
-    const { newStatus, workerName } = req.body;
+    const { lead_id, sender, message } = req.body;
 
-    const fields = [];
-    const values = [];
-    let argCount = 1;
+    await pool.query(
+      `
+      INSERT INTO chats (id, lead_id, sender, message)
+      VALUES ($1,$2,$3,$4)
+      `,
+      [uuidv4(), lead_id, sender, message]
+    );
 
-    if (newStatus) {
-      fields.push(`status = $${argCount++}`);
-      values.push(newStatus);
-    }
-    if (workerName) {
-      fields.push(`workerAssigned = $${argCount++}`);
-      values.push(workerName);
-    }
-
-    if (fields.length === 0) {
-      return res.status(400).json({ message: "No fields to update" });
-    }
-
-    values.push(id); 
-    const query = `
-      UPDATE chats
-      SET ${fields.join(', ')}
-      WHERE id = $${argCount}
-      RETURNING *
-    `;
-    
-    const result = await pool.query(query, values);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: "Booking not found" });
-    }
-    res.json({ status: "success", message: "Booking updated", data: result.rows[0] });
-  } catch (error) {
-    console.error("Error updating booking:", error.message);
-    res.status(500).json({ message: "Error updating booking" });
+    res.json({ message: 'Message saved' });
+  } catch (err) {
+    res.status(500).json({ message: 'Chat failed' });
   }
 });
 
-// --- [NEW] DELETE SIGNUP ROUTE ---
-app.delete('/api/signups/:id', authMiddleware, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const query = 'DELETE FROM signups WHERE id = $1 RETURNING *';
-    const result = await pool.query(query, [id]);
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: "Signup not found" });
-    }
-    
-    res.json({ status: 'success', message: 'Signup deleted successfully' });
-  
-  } catch (error) {
-    console.error("Error deleting signup:", error.message);
-    res.status(500).json({ message: "Error deleting signup" }); 
-  }
-});
-
-// --- [NEW] EDIT WORKER ROUTE ---
-app.put('/api/workers/:id', authMiddleware, async (req, res) => {
-  try {
-    const { id } = req.params;
-    // Get all fields from the body
-    const { name, phone, service, city, pincode, status } = req.body;
-
-    const query = `
-      UPDATE workers 
-      SET name = $1, phone = $2, service = $3, city = $4, pincode = $5, status = $6
-      WHERE id = $7
-      RETURNING *
-    `;
-    const values = [name, phone, service, city, pincode, status, id];
-    
-    const result = await pool.query(query, values);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: "Worker not found" });
-    }
-    
-    res.json({ status: "success", message: "Worker updated!", data: result.rows[0] });
-
-  } catch (error) {
-    console.error("Error updating worker:", error.message);
-    res.status(500).json({ message: "Error updating worker" });
-  }
-});
-
-// --- [NEW] DELETE WORKER ROUTE ---
-app.delete('/api/workers/:id', authMiddleware, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const query = 'DELETE FROM workers WHERE id = $1 RETURNING *';
-    const result = await pool.query(query, [id]);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: "Worker not found" });
-    }
-    
-    res.json({ status: 'success', message: 'Worker deleted successfully' });
-  
-  } catch (error) {
-    console.error("Error deleting worker:", error.message);
-    res.status(500).json({ message: "Error deleting worker" });
-  }
-});
-
-
-// --- 7. GLOBAL ERROR HANDLER ---
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).send({ message: 'Something broke!', error: err.message });
-});
-
-// --- 8. START SERVER ---
+// ================================
+// 11. START SERVER
+// ================================
 app.listen(PORT, () => {
-  console.log(`CitySetu Backend is live on port ${PORT}`);
-  if (!process.env.DATABASE_URL) {
-    console.warn('⚠️ WARNING: Missing DATABASE_URL. API will not connect to database.');
-  }
-  if (!ADMIN_TOKEN) {
-    console.warn('⚠️ WARNING: Missing ADMIN_TOKEN. Admin routes will be locked.');
-  }
-  // --- [NEW] ADDED PASSWORD CHECK ---
-  if (!process.env.ADMIN_PASSWORD) {
-    console.warn('⚠️ WARNING: Missing ADMIN_PASSWORD. Admin login will fail.');
-  }
+  console.log(`🚀 CitySetu backend running on port ${PORT}`);
 });
