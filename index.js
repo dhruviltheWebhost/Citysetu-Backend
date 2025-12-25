@@ -4,17 +4,14 @@ import dotenv from 'dotenv';
 import pg from 'pg';
 import { nanoid } from 'nanoid';
 
-// ================================
-// 1. INITIAL SETUP
-// ================================
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 
-// ================================
-// 2. DATABASE (Neon PostgreSQL)
-// ================================
+/* ================================
+   DATABASE (Neon PostgreSQL)
+================================ */
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
@@ -29,9 +26,9 @@ pool.connect()
     console.error('❌ Database connection error:', err.message);
   });
 
-// ================================
-// 3. MIDDLEWARE
-// ================================
+/* ================================
+   MIDDLEWARE
+================================ */
 app.use(cors());
 app.use(express.json());
 
@@ -42,16 +39,16 @@ const authMiddleware = (req, res, next) => {
   next();
 };
 
-// ================================
-// 4. BASIC ROUTES
-// ================================
+/* ================================
+   BASIC ROUTES
+================================ */
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// ================================
-// 5. SERVICES
-// ================================
+/* ================================
+   SERVICES
+================================ */
 app.get('/api/services', async (req, res) => {
   try {
     const result = await pool.query(
@@ -59,13 +56,14 @@ app.get('/api/services', async (req, res) => {
     );
     res.json({ services: result.rows });
   } catch (err) {
+    console.error('❌ SERVICES ERROR:', err.message);
     res.status(500).json({ message: 'Failed to fetch services' });
   }
 });
 
-// ================================
-// 6. PROFESSIONAL SIGNUP
-// ================================
+/* ================================
+   PROFESSIONAL SIGNUP
+================================ */
 app.post('/api/professionals/signup', async (req, res) => {
   try {
     const { name, phone, serviceIds } = req.body;
@@ -77,7 +75,7 @@ app.post('/api/professionals/signup', async (req, res) => {
     const professionalId = nanoid();
 
     await pool.query(
-      "INSERT INTO professionals (id, name, phone) VALUES ($1,$2,$3)",
+      "INSERT INTO professionals (id, name, phone, approved) VALUES ($1,$2,$3,false)",
       [professionalId, name, phone]
     );
 
@@ -93,13 +91,66 @@ app.post('/api/professionals/signup', async (req, res) => {
     });
 
   } catch (err) {
+    console.error('❌ SIGNUP ERROR:', err.message);
     res.status(500).json({ message: 'Signup failed' });
   }
 });
 
-// ================================
-// 7. ADMIN – APPROVE PROFESSIONAL
-// ================================
+/* ================================
+   ✅ NEW: GET ALL APPROVED PROFESSIONALS
+   (THIS FIXES YOUR FRONTEND)
+================================ */
+app.get('/api/professionals/all', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        p.id,
+        p.name,
+        p.phone,
+        s.name AS service
+      FROM professionals p
+      JOIN professional_services ps ON ps.professional_id = p.id
+      JOIN services s ON s.id = ps.service_id
+      WHERE p.approved = true
+      ORDER BY s.name, p.name
+    `);
+
+    res.json({ professionals: result.rows });
+
+  } catch (err) {
+    console.error('❌ FETCH ALL PROFESSIONALS ERROR:', err.message);
+    res.status(500).json({
+      message: 'Failed to fetch professionals',
+      error: err.message
+    });
+  }
+});
+
+/* ================================
+   LIST APPROVED PROFESSIONALS BY SERVICE
+================================ */
+app.get('/api/professionals/:serviceId', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT p.id, p.name, p.phone
+      FROM professionals p
+      JOIN professional_services ps ON p.id = ps.professional_id
+      WHERE ps.service_id = $1 AND p.approved = true
+      `,
+      [req.params.serviceId]
+    );
+
+    res.json({ professionals: result.rows });
+  } catch (err) {
+    console.error('❌ FETCH BY SERVICE ERROR:', err.message);
+    res.status(500).json({ message: 'Failed to fetch professionals' });
+  }
+});
+
+/* ================================
+   ADMIN – APPROVE PROFESSIONAL
+================================ */
 app.put('/api/admin/approve/:id', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
@@ -113,34 +164,14 @@ app.put('/api/admin/approve/:id', authMiddleware, async (req, res) => {
 
     res.json({ professional: result.rows[0] });
   } catch (err) {
+    console.error('❌ APPROVAL ERROR:', err.message);
     res.status(500).json({ message: 'Approval failed' });
   }
 });
 
-// ================================
-// 8. LIST APPROVED PROFESSIONALS BY SERVICE
-// ================================
-app.get('/api/professionals/:serviceId', async (req, res) => {
-  try {
-    const result = await pool.query(
-      `
-      SELECT p.id, p.name
-      FROM professionals p
-      JOIN professional_services ps ON p.id = ps.professional_id
-      WHERE ps.service_id = $1 AND p.approved = true
-      `,
-      [req.params.serviceId]
-    );
-
-    res.json({ professionals: result.rows });
-  } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch professionals' });
-  }
-});
-
-// ================================
-// 9. CREATE LEAD (Customer Request)
-// ================================
+/* ================================
+   CREATE LEAD
+================================ */
 app.post('/api/leads', async (req, res) => {
   try {
     const {
@@ -152,7 +183,6 @@ app.post('/api/leads', async (req, res) => {
     } = req.body;
 
     const leadId = nanoid();
-    const assignedByPlatform = !professional_id;
 
     await pool.query(
       `
@@ -167,20 +197,21 @@ app.post('/api/leads', async (req, res) => {
         customer_name,
         customer_phone,
         requirement,
-        assignedByPlatform
+        !professional_id
       ]
     );
 
     res.status(201).json({ message: 'Lead created successfully' });
 
   } catch (err) {
+    console.error('❌ LEAD ERROR:', err.message);
     res.status(500).json({ message: 'Lead creation failed' });
   }
 });
 
-// ================================
-// 10. PLATFORM CHAT (LOG ONLY)
-// ================================
+/* ================================
+   CHAT LOG
+================================ */
 app.post('/api/chat', async (req, res) => {
   try {
     const { lead_id, sender, message } = req.body;
@@ -195,13 +226,14 @@ app.post('/api/chat', async (req, res) => {
 
     res.json({ message: 'Message saved' });
   } catch (err) {
+    console.error('❌ CHAT ERROR:', err.message);
     res.status(500).json({ message: 'Chat failed' });
   }
 });
 
-// ================================
-// 11. START SERVER
-// ================================
+/* ================================
+   START SERVER
+================================ */
 app.listen(PORT, () => {
   console.log(`🚀 CitySetu backend running on port ${PORT}`);
 });
