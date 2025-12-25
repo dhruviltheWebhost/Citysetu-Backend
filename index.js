@@ -151,6 +151,31 @@ app.get('/api/admin/pending', authMiddleware, async (req, res) => {
     res.status(500).json({ message: 'Failed to load pending approvals' });
   }
 });
+/* ================================
+   ADMIN – GET PENDING APPROVALS
+================================ */
+app.get('/api/admin/pending', authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        p.id,
+        p.name,
+        p.phone,
+        s.name AS service
+      FROM professionals p
+      JOIN professional_services ps ON ps.professional_id = p.id
+      JOIN services s ON s.id = ps.service_id
+      WHERE p.approved = false
+      ORDER BY p.created_at DESC
+    `);
+
+    res.json({ pending: result.rows });
+
+  } catch (err) {
+    console.error('❌ PENDING FETCH ERROR:', err.message);
+    res.status(500).json({ message: 'Failed to fetch pending approvals' });
+  }
+});
 
 
 /* ================================
