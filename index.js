@@ -2,11 +2,11 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import pg from 'pg';
-import { nanoid } from 'nanoid';
 
 dotenv.config();
+
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000;
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 
 /* ================================
@@ -41,7 +41,7 @@ const authMiddleware = (req, res, next) => {
 };
 
 /* ================================
-   BASIC ROUTES
+   HEALTH
 ================================ */
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
@@ -63,28 +63,30 @@ app.get('/api/services', async (req, res) => {
 });
 
 /* ================================
-   PROFESSIONAL SIGNUP
+   PROFESSIONAL SIGNUP (FIXED)
 ================================ */
 app.post('/api/professionals/signup', async (req, res) => {
   try {
     const { name, phone, serviceIds } = req.body;
 
-    if (!name || !phone || !serviceIds?.length) {
+    if (!name || !phone || !Array.isArray(serviceIds) || !serviceIds.length) {
       return res.status(400).json({ message: 'Missing fields' });
     }
 
-    const professionalId = nanoid();
-
-    await pool.query(
-      `INSERT INTO professionals (id, name, phone, approved)
-       VALUES ($1,$2,$3,false)`,
-      [professionalId, name, phone]
+    // ✅ Let PostgreSQL generate UUID
+    const insertProfessional = await pool.query(
+      `INSERT INTO professionals (name, phone, approved)
+       VALUES ($1, $2, false)
+       RETURNING id`,
+      [name, phone]
     );
+
+    const professionalId = insertProfessional.rows[0].id;
 
     for (const serviceId of serviceIds) {
       await pool.query(
         `INSERT INTO professional_services (professional_id, service_id)
-         VALUES ($1,$2)`,
+         VALUES ($1, $2)`,
         [professionalId, serviceId]
       );
     }
@@ -92,6 +94,7 @@ app.post('/api/professionals/signup', async (req, res) => {
     res.status(201).json({
       message: 'Signup successful. Waiting for admin approval.'
     });
+
   } catch (err) {
     console.error('❌ SIGNUP ERROR:', err.message);
     res.status(500).json({ message: 'Signup failed' });
@@ -99,8 +102,7 @@ app.post('/api/professionals/signup', async (req, res) => {
 });
 
 /* ================================
-   ✅ FIXED: GET ALL APPROVED PROFESSIONALS
-   (Frontend depends on this)
+   GET ALL APPROVED PROFESSIONALS
 ================================ */
 app.get('/api/professionals/all', async (req, res) => {
   try {
@@ -109,16 +111,22 @@ app.get('/api/professionals/all', async (req, res) => {
         p.id,
         p.name,
         p.phone,
-        s.name AS service
+        p.approved,
+        json_agg(
+          json_build_object(
+            'id', s.id,
+            'name', s.name
+          )
+        ) AS services
       FROM professionals p
       JOIN professional_services ps ON ps.professional_id = p.id
       JOIN services s ON s.id = ps.service_id
       WHERE p.approved = true
-      ORDER BY s.name, p.name
+      GROUP BY p.id
+      ORDER BY p.name
     `);
 
-    // 👇 IMPORTANT: frontend expects "workers"
-    res.json({ workers: result.rows });
+    res.json({ professionals: result.rows });
 
   } catch (err) {
     console.error('❌ FETCH ALL ERROR:', err.message);
@@ -127,7 +135,7 @@ app.get('/api/professionals/all', async (req, res) => {
 });
 
 /* ================================
-   LIST PROFESSIONALS BY SERVICE ID
+   PROFESSIONALS BY SERVICE
 ================================ */
 app.get('/api/professionals/:serviceId', async (req, res) => {
   try {
@@ -135,7 +143,7 @@ app.get('/api/professionals/:serviceId', async (req, res) => {
       `
       SELECT p.id, p.name, p.phone
       FROM professionals p
-      JOIN professional_services ps ON p.id = ps.professional_id
+      JOIN professional_services ps ON ps.professional_id = p.id
       WHERE ps.service_id = $1 AND p.approved = true
       `,
       [req.params.serviceId]
@@ -149,11 +157,11 @@ app.get('/api/professionals/:serviceId', async (req, res) => {
 });
 
 /* ================================
-   ✅ ADMIN DASHBOARD DATA (FIXES 404)
+   ADMIN DASHBOARD STATS
 ================================ */
 app.get('/api/admin/data', authMiddleware, async (req, res) => {
   try {
-    const [leads, professionals, pending] = await Promise.all([
+    const [leads, approved, pending] = await Promise.all([
       pool.query('SELECT COUNT(*) FROM leads'),
       pool.query('SELECT COUNT(*) FROM professionals WHERE approved = true'),
       pool.query('SELECT COUNT(*) FROM professionals WHERE approved = false')
@@ -162,7 +170,7 @@ app.get('/api/admin/data', authMiddleware, async (req, res) => {
     res.json({
       stats: {
         totalLeads: Number(leads.rows[0].count),
-        approvedProfessionals: Number(professionals.rows[0].count),
+        approvedProfessionals: Number(approved.rows[0].count),
         pendingSignups: Number(pending.rows[0].count)
       }
     });
@@ -173,13 +181,12 @@ app.get('/api/admin/data', authMiddleware, async (req, res) => {
 });
 
 /* ================================
-   ADMIN – APPROVE PROFESSIONAL
+   ADMIN APPROVE
 ================================ */
 app.put('/api/admin/approve/:id', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      `UPDATE professionals SET approved = true
-       WHERE id = $1 RETURNING *`,
+      `UPDATE professionals SET approved = true WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
 
@@ -207,16 +214,13 @@ app.post('/api/leads', async (req, res) => {
       requirement
     } = req.body;
 
-    const leadId = nanoid();
-
     await pool.query(
       `
       INSERT INTO leads
-      (id, service_id, professional_id, customer_name, customer_phone, requirement, assigned_by_platform)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      (service_id, professional_id, customer_name, customer_phone, requirement, assigned_by_platform)
+      VALUES ($1,$2,$3,$4,$5,$6)
       `,
       [
-        leadId,
         service_id,
         professional_id || null,
         customer_name,
@@ -234,16 +238,16 @@ app.post('/api/leads', async (req, res) => {
 });
 
 /* ================================
-   CHAT LOG
+   CHAT
 ================================ */
 app.post('/api/chat', async (req, res) => {
   try {
     const { lead_id, sender, message } = req.body;
 
     await pool.query(
-      `INSERT INTO chats (id, lead_id, sender, message)
-       VALUES ($1,$2,$3,$4)`,
-      [nanoid(), lead_id, sender, message]
+      `INSERT INTO chats (lead_id, sender, message)
+       VALUES ($1,$2,$3)`,
+      [lead_id, sender, message]
     );
 
     res.json({ message: 'Message saved' });
