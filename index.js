@@ -19,11 +19,11 @@ const pool = new pg.Pool({
 
 pool.connect()
   .then(client => {
-    console.log('✅ Database connected successfully (Neon)');
+    console.log('✅ Database connected (Neon)');
     client.release();
   })
   .catch(err => {
-    console.error('❌ Database connection error:', err.message);
+    console.error('❌ DB connection error:', err.message);
   });
 
 /* ================================
@@ -35,7 +35,8 @@ app.use(express.json());
 const authMiddleware = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ message: 'No token provided' });
-  if (token !== ADMIN_TOKEN) return res.status(403).json({ message: 'Invalid token' });
+  if (token !== ADMIN_TOKEN)
+    return res.status(403).json({ message: 'Invalid token' });
   next();
 };
 
@@ -52,7 +53,7 @@ app.get('/api/health', (req, res) => {
 app.get('/api/services', async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, name, category FROM services WHERE active = true ORDER BY id"
+      `SELECT id, name, category FROM services WHERE active = true ORDER BY name`
     );
     res.json({ services: result.rows });
   } catch (err) {
@@ -75,13 +76,15 @@ app.post('/api/professionals/signup', async (req, res) => {
     const professionalId = nanoid();
 
     await pool.query(
-      "INSERT INTO professionals (id, name, phone, approved) VALUES ($1,$2,$3,false)",
+      `INSERT INTO professionals (id, name, phone, approved)
+       VALUES ($1,$2,$3,false)`,
       [professionalId, name, phone]
     );
 
     for (const serviceId of serviceIds) {
       await pool.query(
-        "INSERT INTO professional_services (professional_id, service_id) VALUES ($1,$2)",
+        `INSERT INTO professional_services (professional_id, service_id)
+         VALUES ($1,$2)`,
         [professionalId, serviceId]
       );
     }
@@ -89,7 +92,6 @@ app.post('/api/professionals/signup', async (req, res) => {
     res.status(201).json({
       message: 'Signup successful. Waiting for admin approval.'
     });
-
   } catch (err) {
     console.error('❌ SIGNUP ERROR:', err.message);
     res.status(500).json({ message: 'Signup failed' });
@@ -97,8 +99,8 @@ app.post('/api/professionals/signup', async (req, res) => {
 });
 
 /* ================================
-   ✅ NEW: GET ALL APPROVED PROFESSIONALS
-   (THIS FIXES YOUR FRONTEND)
+   ✅ FIXED: GET ALL APPROVED PROFESSIONALS
+   (Frontend depends on this)
 ================================ */
 app.get('/api/professionals/all', async (req, res) => {
   try {
@@ -115,19 +117,17 @@ app.get('/api/professionals/all', async (req, res) => {
       ORDER BY s.name, p.name
     `);
 
-    res.json({ professionals: result.rows });
+    // 👇 IMPORTANT: frontend expects "workers"
+    res.json({ workers: result.rows });
 
   } catch (err) {
-    console.error('❌ FETCH ALL PROFESSIONALS ERROR:', err.message);
-    res.status(500).json({
-      message: 'Failed to fetch professionals',
-      error: err.message
-    });
+    console.error('❌ FETCH ALL ERROR:', err.message);
+    res.status(500).json({ message: 'Failed to fetch professionals' });
   }
 });
 
 /* ================================
-   LIST APPROVED PROFESSIONALS BY SERVICE
+   LIST PROFESSIONALS BY SERVICE ID
 ================================ */
 app.get('/api/professionals/:serviceId', async (req, res) => {
   try {
@@ -143,8 +143,32 @@ app.get('/api/professionals/:serviceId', async (req, res) => {
 
     res.json({ professionals: result.rows });
   } catch (err) {
-    console.error('❌ FETCH BY SERVICE ERROR:', err.message);
+    console.error('❌ BY SERVICE ERROR:', err.message);
     res.status(500).json({ message: 'Failed to fetch professionals' });
+  }
+});
+
+/* ================================
+   ✅ ADMIN DASHBOARD DATA (FIXES 404)
+================================ */
+app.get('/api/admin/data', authMiddleware, async (req, res) => {
+  try {
+    const [leads, professionals, pending] = await Promise.all([
+      pool.query('SELECT COUNT(*) FROM leads'),
+      pool.query('SELECT COUNT(*) FROM professionals WHERE approved = true'),
+      pool.query('SELECT COUNT(*) FROM professionals WHERE approved = false')
+    ]);
+
+    res.json({
+      stats: {
+        totalLeads: Number(leads.rows[0].count),
+        approvedProfessionals: Number(professionals.rows[0].count),
+        pendingSignups: Number(pending.rows[0].count)
+      }
+    });
+  } catch (err) {
+    console.error('❌ ADMIN DATA ERROR:', err.message);
+    res.status(500).json({ message: 'Admin data failed' });
   }
 });
 
@@ -154,7 +178,8 @@ app.get('/api/professionals/:serviceId', async (req, res) => {
 app.put('/api/admin/approve/:id', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      "UPDATE professionals SET approved = true WHERE id = $1 RETURNING *",
+      `UPDATE professionals SET approved = true
+       WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
 
@@ -202,7 +227,6 @@ app.post('/api/leads', async (req, res) => {
     );
 
     res.status(201).json({ message: 'Lead created successfully' });
-
   } catch (err) {
     console.error('❌ LEAD ERROR:', err.message);
     res.status(500).json({ message: 'Lead creation failed' });
@@ -217,10 +241,8 @@ app.post('/api/chat', async (req, res) => {
     const { lead_id, sender, message } = req.body;
 
     await pool.query(
-      `
-      INSERT INTO chats (id, lead_id, sender, message)
-      VALUES ($1,$2,$3,$4)
-      `,
+      `INSERT INTO chats (id, lead_id, sender, message)
+       VALUES ($1,$2,$3,$4)`,
       [nanoid(), lead_id, sender, message]
     );
 
