@@ -239,7 +239,7 @@ app.get('/api/chat/answer/:id', async (req, res) => {
 ================================ */
 
 // Add Q&A
-app.post('/api/admin/chat', authMiddleware, async (req, res) => {
+app.post('/api/admin/chat/questions', authMiddleware, async (req, res) => {
   const { question, answer } = req.body;
 
   if (!question || !answer) {
@@ -285,7 +285,7 @@ app.put('/api/admin/chat/:id', authMiddleware, async (req, res) => {
 });
 
 // Delete (Soft delete)
-app.delete('/api/admin/chat/:id', authMiddleware, async (req, res) => {
+app.delete('/api/admin/chat/question/:id', authMiddleware, async (req, res) => {
   try {
     await pool.query(
       `UPDATE chat_questions SET active = false WHERE id = $1`,
