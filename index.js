@@ -176,6 +176,129 @@ app.get('/api/admin/pending', authMiddleware, async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch pending approvals' });
   }
 });
+/* ================================
+   CHAT – CUSTOMER
+================================ */
+
+// Start chat session
+app.post('/api/chat/start', async (req, res) => {
+  try {
+    const chatId = randomUUID();
+
+    await pool.query(
+      `INSERT INTO chat_sessions (id) VALUES ($1)`,
+      [chatId]
+    );
+
+    res.json({ chatId });
+  } catch (err) {
+    console.error('❌ CHAT START:', err.message);
+    res.status(500).json({ message: 'Chat start failed' });
+  }
+});
+
+// Get predefined questions
+app.get('/api/chat/questions', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, question
+      FROM chat_questions
+      WHERE active = true
+      ORDER BY id ASC
+    `);
+
+    res.json({ questions: result.rows });
+  } catch (err) {
+    console.error('❌ CHAT QUESTIONS:', err.message);
+    res.status(500).json({ message: 'Failed to load questions' });
+  }
+});
+
+// Get answer for selected question
+app.get('/api/chat/answer/:id', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT answer
+      FROM chat_questions
+      WHERE id = $1 AND active = true
+    `, [req.params.id]);
+
+    if (!result.rows.length) {
+      return res.status(404).json({ message: 'Answer not found' });
+    }
+
+    res.json({ answer: result.rows[0].answer });
+  } catch (err) {
+    console.error('❌ CHAT ANSWER:', err.message);
+    res.status(500).json({ message: 'Failed to load answer' });
+  }
+});
+
+/* ================================
+   ADMIN – CHAT Q&A
+================================ */
+
+// Add Q&A
+app.post('/api/admin/chat', authMiddleware, async (req, res) => {
+  const { question, answer } = req.body;
+
+  if (!question || !answer) {
+    return res.status(400).json({ message: 'Question & Answer required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO chat_questions (question, answer)
+       VALUES ($1,$2) RETURNING *`,
+      [question, answer]
+    );
+
+    res.status(201).json({ qa: result.rows[0] });
+  } catch (err) {
+    console.error('❌ ADD CHAT QA:', err.message);
+    res.status(500).json({ message: 'Add failed' });
+  }
+});
+
+// Update Q&A
+app.put('/api/admin/chat/:id', authMiddleware, async (req, res) => {
+  const { question, answer, active } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE chat_questions
+       SET question = $1, answer = $2, active = $3
+       WHERE id = $4
+       RETURNING *`,
+      [question, answer, active ?? true, req.params.id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({ message: 'Not found' });
+    }
+
+    res.json({ qa: result.rows[0] });
+  } catch (err) {
+    console.error('❌ UPDATE CHAT QA:', err.message);
+    res.status(500).json({ message: 'Update failed' });
+  }
+});
+
+// Delete (Soft delete)
+app.delete('/api/admin/chat/:id', authMiddleware, async (req, res) => {
+  try {
+    await pool.query(
+      `UPDATE chat_questions SET active = false WHERE id = $1`,
+      [req.params.id]
+    );
+
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    console.error('❌ DELETE CHAT QA:', err.message);
+    res.status(500).json({ message: 'Delete failed' });
+  }
+});
+
 
 
 /* ================================
